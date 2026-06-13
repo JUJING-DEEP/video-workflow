@@ -26,6 +26,7 @@ from app.services.exceptions import (
     MediaProcessingError,
     sanitize_error_message,
 )
+from app.services.distiller import distill_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -279,24 +280,39 @@ class TranscriptionPipeline:
 
     async def _distill_text(self, cleaned_text: str, output_style: str) -> str:
         """
-        Distill cleaned text into shareable format.
+        Distill cleaned text into shareable format using distiller.
 
-        Currently a placeholder - outputs cleaned text with basic structure.
-        Real implementation would use LLM for intelligent distillation.
+        Args:
+            cleaned_text: Cleaned transcript text
+            output_style: Output style (default: distilled_original)
+
+        Returns:
+            Distilled text content
+
+        Raises:
+            Exception: If distillation fails, propagates error with clear message
         """
         if not cleaned_text:
             return ""
 
-        # Basic structure - real implementation would use LLM
-        lines = cleaned_text.split("\n")
-        content = "\n\n".join(line.strip() for line in lines if line.strip())
+        try:
+            result = distill_transcript(cleaned_text, output_style)
 
-        return f"""# 转录稿
+            # Log warnings but don't fail on quality issues
+            for warning in result.warnings:
+                logger.warning(f"Distillation warning for job: {warning}")
 
-{content}
+            # Log quality issues but don't fail - distiller still produces output
+            if result.issues:
+                issue_msgs = [f"{i.category}: {i.description}" for i in result.issues]
+                logger.warning(f"Distillation quality issues: {issue_msgs}")
 
----
-*本稿件为机器转录并清洗整理，内容供参考。*"""
+            return result.distilled_text
+
+        except Exception as e:
+            error_msg = f"Distillation failed: {str(e)}"
+            logger.error(error_msg)
+            raise MediaProcessingError(error_msg, code="DISTILLATION_FAILED")
 
     # ============================================================
     # Mock fallbacks (when real services unavailable)
