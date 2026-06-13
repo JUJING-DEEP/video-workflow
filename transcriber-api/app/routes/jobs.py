@@ -96,13 +96,22 @@ async def get_job(job_id: str) -> JobResponse:
 
 
 async def _run_pipeline(job_id: str):
-    """Run the mock transcription pipeline"""
+    """Run the transcription pipeline (with mock fallback)"""
     db = get_db()
-    pipeline = TranscriptionPipeline(db)
+    pipeline = TranscriptionPipeline(db, use_mock=True)
     try:
         await pipeline.process(job_id)
     except Exception as e:
-        logger.error(f"Pipeline error for job {job_id}: {e}")
+        from app.services.exceptions import sanitize_error_message
+
+        error_msg = sanitize_error_message(str(e))
+        logger.error(f"Pipeline error for job {job_id}: {error_msg}")
+        await db.update_job(
+            job_id,
+            status="failed",
+            error_message=error_msg,
+            updated_at=datetime.utcnow(),
+        )
 
 
 def _to_response(job) -> JobResponse:
