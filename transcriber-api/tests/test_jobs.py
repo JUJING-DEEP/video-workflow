@@ -152,6 +152,35 @@ class TestGetJob:
         data = response.json()
         assert data["status"] in ["completed", "failed", "pending"]
 
+    @pytest.mark.asyncio
+    async def test_get_job_returns_distilled_content(self, client: AsyncClient):
+        """GET /jobs/{id} 返回完整的 raw_transcript, cleaned_transcript, distilled_content 字段"""
+        # Create an upload job (faster - uses mock pipeline directly)
+        create_response = await client.post(
+            "/api/media-transcriber/jobs",
+            json={
+                "source_type": "upload",
+                "file_path": "/fake/path/audio.mp3",
+            },
+        )
+        assert create_response.status_code == 201
+        job_id = create_response.json()["id"]
+
+        # Wait for pipeline
+        import asyncio
+        await asyncio.sleep(3)
+
+        # Get the job
+        response = await client.get(f"/api/media-transcriber/jobs/{job_id}")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Response should contain all transcript fields
+        assert "status" in data
+        assert "raw_transcript" in data
+        assert "cleaned_transcript" in data
+        assert "distilled_content" in data
+
 
 class TestPipeline:
     """Tests for pipeline behavior"""
