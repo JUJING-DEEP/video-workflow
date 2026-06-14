@@ -66,6 +66,9 @@ class Job(BaseModel):
     cleaned_transcript: Optional[str] = None
     distilled_content: Optional[str] = None
     error_message: Optional[str] = None
+    feishu_document_id: Optional[str] = None
+    feishu_document_url: Optional[str] = None
+    published_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -86,6 +89,9 @@ class JobResponse(BaseModel):
     cleaned_transcript: Optional[str] = None
     distilled_content: Optional[str] = None
     error_message: Optional[str] = None
+    feishu_document_id: Optional[str] = None
+    feishu_document_url: Optional[str] = None
+    published_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

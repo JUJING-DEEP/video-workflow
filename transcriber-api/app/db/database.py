@@ -45,6 +45,9 @@ class JobModel(Base):
     cleaned_transcript = Column(Text, nullable=True)
     distilled_content = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
+    feishu_document_id = Column(Text, nullable=True)
+    feishu_document_url = Column(Text, nullable=True)
+    published_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

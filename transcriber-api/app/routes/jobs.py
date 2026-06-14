@@ -8,14 +8,30 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 
 from app.db.database import Database, get_db
 from app.models.job import JobCreate, JobResponse, JobStatus, SourceType
 from app.services.pipeline import TranscriptionPipeline
 
+import os
+from datetime import datetime
+
+from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/media-transcriber", tags=["jobs"])
+
+
+class FeishuPublishResult(BaseModel):
+    """Response model for Feishu publish operation"""
+
+    job_id: str
+    status: str
+    document_id: Optional[str] = None
+    document_url: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 def generate_job_id() -> str:
@@ -95,6 +111,85 @@ async def get_job(job_id: str) -> JobResponse:
     return _to_response(job)
 
 
+@router.post("/jobs/{job_id}/publish/feishu", response_model=FeishuPublishResult)
+async def publish_job_to_feishu(job_id: str) -> FeishuPublishResult:
+    """
+    Publish job content to Feishu document.
+
+    Requires the job to have distilled_content.
+    """
+    db = get_db()
+    job = await db.get_job(job_id)
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found",
+        )
+
+    # Check for distilled content
+    if not job.distilled_content:
+        return FeishuPublishResult(
+            job_id=job_id,
+            status="error",
+            error_message="Job has no distilled content",
+        )
+
+    # Get Feishu config from environment
+    app_id = os.environ.get("FEISHU_APP_ID")
+    app_secret = os.environ.get("FEISHU_APP_SECRET")
+
+    if not app_id or not app_secret:
+        return FeishuPublishResult(
+            job_id=job_id,
+            status="error",
+            error_message="FEISHU_APP_ID and FEISHU_APP_SECRET must be configured",
+        )
+
+    try:
+        config = FeishuConfig(app_id=app_id, app_secret=app_secret)
+        publisher = FeishuPublisher(config)
+
+        # Build title from job metadata
+        title = f"转录任务 {job_id}"
+
+        # Publish (create document + write content)
+        result = publisher.publish(title, job.distilled_content)
+
+        if result.success:
+            # Update job with Feishu document info
+            now = datetime.utcnow()
+            await db.update_job(
+                job_id,
+                feishu_document_id=result.document_id,
+                feishu_document_url=result.document_url,
+                published_at=now,
+            )
+            return FeishuPublishResult(
+                job_id=job_id,
+                status="success",
+                document_id=result.document_id,
+                document_url=result.document_url,
+            )
+        else:
+            from app.services.exceptions import sanitize_error_message
+            return FeishuPublishResult(
+                job_id=job_id,
+                status="error",
+                error_message=sanitize_error_message(result.error_message or "Unknown error"),
+            )
+
+    except Exception as e:
+        # Sanitize any exception before returning
+        from app.services.exceptions import sanitize_error_message
+        safe_msg = sanitize_error_message(str(e))
+        return FeishuPublishResult(
+            job_id=job_id,
+            status="error",
+            error_message=f"Feishu publish failed: {safe_msg}",
+        )
+
+
 async def _run_pipeline(job_id: str):
     """Run the transcription pipeline (with mock fallback)"""
     db = get_db()
@@ -128,6 +223,9 @@ def _to_response(job) -> JobResponse:
         cleaned_transcript=job.cleaned_transcript,
         distilled_content=job.distilled_content,
         error_message=job.error_message,
+        feishu_document_id=job.feishu_document_id,
+        feishu_document_url=job.feishu_document_url,
+        published_at=job.published_at,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )

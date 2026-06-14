@@ -98,13 +98,25 @@ def sanitize_error_message(message: str) -> str:
     """
     import re
 
-    # Remove potential tokens (hex strings that look like API keys)
-    message = re.sub(r'[a-f0-9]{32,}', '[REDACTED]', message)
+    # Remove hex strings >= 16 chars that look like API keys/tokens
+    message = re.sub(r'[a-f0-9]{16,}', '[REDACTED]', message)
 
-    # Remove potential cookies (key=value patterns)
-    message = re.sub(r'\w+=\w+;?', '', message)
+    # Remove secrets near keywords BEFORE cookie removal
+    # (otherwise cookie regex eats app_secret=... as a "cookie")
+    patterns = [
+        r'(tenant_access_token\s*[=:]\s*)[^\s,}]+',
+        r'(app_secret\s*[=:]\s*)[^\s,}]+',
+        r'(password\s*[=:]\s*)[^\s,}]+',
+        r'(bearer\s+)[^\s,}]+',
+        r'(token\s+)[^\s,}]+',          # token <value> (space-separated)
+        r'(token\s*[=:]\s*)[^\s,}]+',   # token: or token= <value>
+        r'(secret\s*[=:]\s*)[^\s,}]+',
+        r'(key\s*[=:]\s*)[^\s,}]+',
+    ]
+    for pattern in patterns:
+        message = re.sub(pattern, r'\1[REDACTED]', message, flags=re.IGNORECASE)
 
-    # Remove URLs with credentials
+    # Remove URLs with credentials (after secret redaction so no sensitive data left)
     message = re.sub(r'https?://[^@]+@', 'https://', message)
 
     return message
