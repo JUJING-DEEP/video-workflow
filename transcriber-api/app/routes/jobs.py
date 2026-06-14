@@ -15,13 +15,43 @@ from app.models.job import JobCreate, JobResponse, JobStatus, SourceType
 from app.services.pipeline import TranscriptionPipeline
 
 import os
-from datetime import datetime
 
 from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/media-transcriber", tags=["jobs"])
+
+
+class FeishuHealthResult(BaseModel):
+    """Response model for Feishu health check"""
+
+    status: str
+    reason: Optional[str] = None
+
+
+@router.get("/health/feishu", response_model=FeishuHealthResult)
+async def get_feishu_health() -> FeishuHealthResult:
+    """
+    Check Feishu API connectivity and credentials.
+
+    Returns healthy status if app_id/app_secret are configured
+    and a valid tenant_access_token can be obtained.
+    """
+    app_id = os.environ.get("FEISHU_APP_ID")
+    app_secret = os.environ.get("FEISHU_APP_SECRET")
+
+    if not app_id or not app_secret:
+        return FeishuHealthResult(
+            status="unhealthy",
+            reason="FEISHU_APP_ID and FEISHU_APP_SECRET must be configured",
+        )
+
+    folder_token = os.environ.get("FEISHU_FOLDER_TOKEN")
+    config = FeishuConfig(app_id=app_id, app_secret=app_secret, folder_token=folder_token)
+    publisher = FeishuPublisher(config)
+    result = publisher.health_check()
+    return FeishuHealthResult(status=result["status"], reason=result.get("reason"))
 
 
 class FeishuPublishResult(BaseModel):

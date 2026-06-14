@@ -377,3 +377,269 @@ async def test_missing_feishu_config(client, db):
         data = response.json()
         assert data["status"] == "error"
         assert "configure" in data["error_message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_health_check_success(client):
+    """Test Feishu health check returns healthy when credentials are valid"""
+    with patch("app.routes.jobs.FeishuPublisher") as mock_publisher_cls:
+        mock_publisher = MagicMock()
+        mock_publisher.health_check.return_value = {"status": "healthy"}
+        mock_publisher_cls.return_value = mock_publisher
+
+        response = await client.get("/api/media-transcriber/health/feishu")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_health_check_auth_failure(client):
+    """Test Feishu health check returns unhealthy when token fetch fails"""
+    with patch("app.routes.jobs.FeishuPublisher") as mock_publisher_cls:
+        mock_publisher = MagicMock()
+        mock_publisher.health_check.return_value = {
+            "status": "unhealthy",
+            "reason": "invalid credentials"
+        }
+        mock_publisher_cls.return_value = mock_publisher
+
+        response = await client.get("/api/media-transcriber/health/feishu")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unhealthy"
+        assert "invalid credentials" in data.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_health_check_missing_config(client):
+    """Test Feishu health check returns unhealthy when credentials not configured"""
+    with patch.dict(os.environ, {"FEISHU_APP_ID": "", "FEISHU_APP_SECRET": ""}):
+        response = await client.get("/api/media-transcriber/health/feishu")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unhealthy"
+        assert "configure" in data["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_folder_token_enabled(client, db):
+    """Test publish works when folder_token is configured"""
+    from datetime import datetime
+
+    job_id = "test_folder_enabled"
+    await db.create_job({
+        "id": job_id,
+        "source_type": "url",
+        "source_url": "https://example.com/video",
+        "language": "zh",
+        "output_style": "distilled_original",
+        "status": "completed",
+        "distilled_content": "# Content",
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    })
+
+    with patch("app.routes.jobs.FeishuPublisher") as mock_publisher_cls:
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.document_id = "doc_folder_test"
+        mock_result.document_url = "https://feishu.cn/docx/doc_folder_test"
+        mock_publisher = MagicMock()
+        mock_publisher.publish.return_value = mock_result
+        mock_publisher_cls.return_value = mock_publisher
+
+        with patch.dict(os.environ, {
+            "FEISHU_APP_ID": "cli_test",
+            "FEISHU_APP_SECRET": "secret_test",
+            "FEISHU_FOLDER_TOKEN": "folder_token_abc123secretdef456",
+        }):
+            response = await client.post(
+                f"/api/media-transcriber/jobs/{job_id}/publish/feishu"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_folder_token_disabled(client, db):
+    """Test publish works when folder_token is NOT configured (backward compat)"""
+    from datetime import datetime
+
+    job_id = "test_folder_disabled"
+    await db.create_job({
+        "id": job_id,
+        "source_type": "url",
+        "source_url": "https://example.com/video",
+        "language": "zh",
+        "output_style": "distilled_original",
+        "status": "completed",
+        "distilled_content": "# Content",
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    })
+
+    with patch("app.routes.jobs.FeishuPublisher") as mock_publisher_cls:
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.document_id = "doc_no_folder"
+        mock_result.document_url = "https://feishu.cn/docx/doc_no_folder"
+        mock_publisher = MagicMock()
+        mock_publisher.publish.return_value = mock_result
+        mock_publisher_cls.return_value = mock_publisher
+
+        with patch.dict(os.environ, {
+            "FEISHU_APP_ID": "cli_test",
+            "FEISHU_APP_SECRET": "secret_test",
+            "FEISHU_FOLDER_TOKEN": "",
+        }):
+            response = await client.post(
+                f"/api/media-transcriber/jobs/{job_id}/publish/feishu"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_folder_token_not_leaked_in_error(client, db):
+    """Test that folder_token does not appear in error messages"""
+    from datetime import datetime
+
+    job_id = "test_folder_sanitize"
+    await db.create_job({
+        "id": job_id,
+        "source_type": "url",
+        "source_url": "https://example.com/video",
+        "language": "zh",
+        "output_style": "distilled_original",
+        "status": "completed",
+        "distilled_content": "# Content",
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    })
+
+    with patch("app.routes.jobs.FeishuPublisher") as mock_publisher_cls:
+        mock_result = MagicMock()
+        mock_result.success = False
+        mock_result.error_message = "folder_token=abc123secretdef456abc123 is invalid"
+        mock_publisher = MagicMock()
+        mock_publisher.publish.return_value = mock_result
+        mock_publisher_cls.return_value = mock_publisher
+
+        response = await client.post(
+            f"/api/media-transcriber/jobs/{job_id}/publish/feishu"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        if data["error_message"]:
+            assert "abc123secretdef456abc123" not in data["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_feishu_publisher_sanitize_folder_token():
+    """Test FeishuPublisher._sanitize_error catches folder_token"""
+    from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
+
+    config = FeishuConfig(app_id="cli_test", app_secret="secret_test")
+    publisher = FeishuPublisher(config)
+
+    # folder_token pattern - value should be redacted
+    msg = "folder_token=abc123secretdef456abc123 is invalid"
+    sanitized = publisher._sanitize_error(msg)
+    assert "abc123secretdef456abc123" not in sanitized
+    assert "[REDACTED]" in sanitized
+
+
+@pytest.mark.asyncio
+async def test_feishu_publisher_sanitize_bearer_token():
+    """Test FeishuPublisher._sanitize_error catches bearer token"""
+    from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
+
+    config = FeishuConfig(app_id="cli_test", app_secret="secret_test")
+    publisher = FeishuPublisher(config)
+
+    msg = "Bearer abc123secretdef456abc123 is invalid"
+    sanitized = publisher._sanitize_error(msg)
+    assert "abc123secretdef456abc123" not in sanitized
+
+
+@pytest.mark.asyncio
+async def test_feishu_publisher_health_check_no_app_id():
+    """Test health_check returns unhealthy when app_id is empty"""
+    from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
+
+    config = FeishuConfig(app_id="", app_secret="secret_test")
+    publisher = FeishuPublisher(config)
+    result = publisher.health_check()
+    assert result["status"] == "unhealthy"
+    assert "app_id" in result["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_feishu_publisher_health_check_no_app_secret():
+    """Test health_check returns unhealthy when app_secret is empty"""
+    from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
+
+    config = FeishuConfig(app_id="cli_test", app_secret="")
+    publisher = FeishuPublisher(config)
+    result = publisher.health_check()
+    assert result["status"] == "unhealthy"
+    assert "app_secret" in result["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_feishu_publisher_health_check_token_failure():
+    """Test health_check returns unhealthy when token fetch fails"""
+    from app.services.feishu_publisher import FeishuPublisher, FeishuConfig, FeishuAuthError
+    from unittest.mock import patch
+
+    config = FeishuConfig(app_id="cli_test", app_secret="secret_test")
+    publisher = FeishuPublisher(config)
+
+    with patch.object(publisher, "_get_token", side_effect=FeishuAuthError("invalid credentials")):
+        result = publisher.health_check()
+        assert result["status"] == "unhealthy"
+        assert "invalid credentials" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_feishu_publisher_health_check_success():
+    """Test health_check returns healthy when token fetch succeeds"""
+    from app.services.feishu_publisher import FeishuPublisher, FeishuConfig
+
+    config = FeishuConfig(app_id="cli_test", app_secret="secret_test")
+    publisher = FeishuPublisher(config)
+
+    with patch.object(publisher, "_get_token", return_value="valid_token_abc123"):
+        result = publisher.health_check()
+        assert result["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_feishu_config_with_folder_token():
+    """Test FeishuConfig accepts folder_token"""
+    from app.services.feishu_publisher import FeishuConfig
+
+    config = FeishuConfig(
+        app_id="cli_test",
+        app_secret="secret_test",
+        folder_token="folder_token_abc123"
+    )
+    assert config.folder_token == "folder_token_abc123"
+
+
+@pytest.mark.asyncio
+async def test_feishu_config_without_folder_token():
+    """Test FeishuConfig defaults folder_token to None"""
+    from app.services.feishu_publisher import FeishuConfig
+
+    config = FeishuConfig(app_id="cli_test", app_secret="secret_test")
+    assert config.folder_token is None

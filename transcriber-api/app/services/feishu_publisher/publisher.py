@@ -37,11 +37,19 @@ class FeishuPublisher:
     def _sanitize_error(self, message: str) -> str:
         """Remove potentially sensitive data from error messages"""
         import re
-        # Remove tokens, secrets, app_id with secret
-        sanitized = re.sub(r'app_id[^"\\s]*', '[APP_ID]', message)
-        sanitized = re.sub(r'app_secret[^"\\s]*', '[APP_SECRET]', sanitized)
-        sanitized = re.sub(r'bearer [^"\\s]+', '[TOKEN]', sanitized)
-        sanitized = re.sub(r'[a-f0-9]{32,}', '[REDACTED]', sanitized)
+        # Remove hex tokens >= 16 chars
+        sanitized = re.sub(r'[a-f0-9]{16,}', '[REDACTED]', message)
+        # Remove tokens, secrets, app_id near keywords
+        patterns = [
+            r'(app_secret\s*[=:]\s*)[^\s,}]+',
+            r'(tenant_access_token\s*[=:]\s*)[^\s,}]+',
+            r'(folder_token\s*[=:]\s*)[^\s,}]+',
+            r'(bearer\s+)[^\s,}]+',
+            r'(token\s+)[^\s,}]+',
+            r'(password\s*[=:]\s*)[^\s,}]+',
+        ]
+        for p in patterns:
+            sanitized = re.sub(p, r'\1[REDACTED]', sanitized, flags=re.IGNORECASE)
         return sanitized
 
     def _get_token(self) -> str:
@@ -99,6 +107,8 @@ class FeishuPublisher:
             "Content-Type": "application/json",
         }
         payload = {"title": title}
+        if self.config.folder_token:
+            payload["folder_token"] = self.config.folder_token
 
         try:
             with httpx.Client(timeout=30.0) as client:
@@ -221,6 +231,27 @@ class FeishuPublisher:
             })
 
         return blocks
+
+    def health_check(self) -> dict:
+        """
+        Verify Feishu credentials and connectivity.
+
+        Returns:
+            {"status": "healthy"} or {"status": "unhealthy", "reason": "..."}
+        """
+        if not self.config.app_id:
+            return {"status": "unhealthy", "reason": "app_id not configured"}
+
+        if not self.config.app_secret:
+            return {"status": "unhealthy", "reason": "app_secret not configured"}
+
+        try:
+            self._get_token()
+            return {"status": "healthy"}
+        except FeishuError as e:
+            return {"status": "unhealthy", "reason": e.message}
+        except Exception as e:
+            return {"status": "unhealthy", "reason": self._sanitize_error(str(e))}
 
     def publish(self, title: str, content: str) -> PublishResult:
         """

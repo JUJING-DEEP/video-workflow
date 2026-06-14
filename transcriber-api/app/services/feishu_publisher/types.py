@@ -10,6 +10,7 @@ class FeishuConfig:
     """Feishu app configuration"""
     app_id: str
     app_secret: str
+    folder_token: Optional[str] = None
 
 
 @dataclass
